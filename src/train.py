@@ -10,43 +10,57 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 from transformers import AdamW, get_constant_schedule_with_warmup
-from dataloader import Dureader
 # from dataset.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
 from transformers import BertForQuestionAnswering, BertConfig
+from utils import ReaderDataset
 # 随机种子
 random.seed(config.seed)
 torch.manual_seed(config.seed)
+import json
+
+
+def load_data(filename):
+    D = []
+    for d in json.load(open(filename))['data'][0]['paragraphs']:
+        for qa in d['qas']:
+            D.append([
+                qa['id'], d['context'], qa['question'],qa['answers'][0]['text'],qa['answers'][0]['answer_start']
+                # [a['text'] for a in qa.get('answers', [])]
+            ])
+    return D
 
 
 def train():
+    # 1 载入数据
+    train_data = load_data('../data/train.json')
+    dev_data = load_data('../data/dev.json')
+    train_set = ReaderDataset(train_data,train=True)
+    train_dataloader = DataLoader(train_set, batch_size=config.batch_size,
+                              shuffle=False, num_workers=0, collate_fn=collate_fn)
+
+    # 2 载入模型
     # 加载预训练bert
     model = BertForQuestionAnswering.from_pretrained("bert-base-chinese")
-                    # cache_dir=os.path.join(str(PYTORCH_PRETRAINED_BERT_CACHE), 'distributed_{}'.format(-1)))
     device = config.device
     model.to(device)
 
-    # 准备 optimizer
+    # 3 准备 optimizer
     param_optimizer = list(model.named_parameters())
     param_optimizer = [n for n in param_optimizer if 'pooler' not in n[0]]
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
     optimizer_grouped_parameters = [
-            {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
-            {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
-            ]
+        {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
+        {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+    ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=config.learning_rate)
     total_steps = config.num_train_optimization_steps
     warmup_steps = int(0.1 * total_steps)
     scheduler = get_constant_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps)
-    # 准备数据
-    data = Dureader()
-    train_dataloader, dev_dataloader = data.train_iter, data.dev_iter
 
-    best_loss = 100000.0
-    model.train()
+    # 4 开始训练
     for i in range(config.num_train_epochs):
         for step , batch in enumerate(tqdm(train_dataloader, desc="Epoch")):
-            input_ids, input_mask, segment_ids, start_positions, end_positions = \
-                                        batch.input_ids, batch.input_mask, batch.segment_ids, batch.start_position, batch.end_position
+            input_ids, input_mask, segment_ids, start_positions, end_positions = batch
             input_ids, input_mask, segment_ids, start_positions, end_positions = \
                                         input_ids.to(device), input_mask.to(device), segment_ids.to(device), start_positions.to(device), end_positions.to(device)
 
@@ -62,18 +76,22 @@ def train():
                 optimizer.zero_grad()
                 print(loss.item())
 
-            # 验证
-            if step % 100 == 0:
-                pass
-                # eval_loss = evaluate(model, dev_dataloader)
-                # print(eval_loss)
-                # if eval_loss < best_loss:
-                #     best_loss = eval_loss
-                #     print(2)
-                #     torch.save(model.state_dict(), '../model_dir/' + "best_model.pt")
-                #     torch.save(model.state_dict(), "best_model.pt")
-                #
-                #     model.train()
+    # # make prediction
+    # test_predicts = []
+    #
+    # for inputs, token_types in test_loader:
+    #     inputs, token_types = inputs.to(device), token_types.to(device)
+    #     masks = (inputs > 0).to(device)
+    #     v_pred = model(inputs, token_types, masks)
+    #     v_pred = torch.sigmoid(v_pred)
+    #     # predict
+    #     test_predicts.extend(v_pred.cpu().numpy())
+    #
+    # # 准备数据
+    # data = Dureader()
+    # train_dataloader, dev_dataloader = data.train_iter, data.dev_iter
+    #
+    #
     torch.save(model.state_dict(), "final.pt")
 
 
