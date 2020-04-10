@@ -12,7 +12,7 @@ from torch.utils.data import Dataset
 from transformers import AdamW, get_constant_schedule_with_warmup
 # from dataset.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
 from transformers import BertForQuestionAnswering, BertConfig
-from utils import ReaderDataset
+from utils import *
 # 随机种子
 random.seed(config.seed)
 torch.manual_seed(config.seed)
@@ -31,13 +31,13 @@ def load_data(filename):
 
 
 def train():
-    # 1 载入数据
-    train_data = load_data('../data/train.json')
-    dev_data = load_data('../data/dev.json')
     train_set = ReaderDataset(train_data,train=True)
     train_dataloader = DataLoader(train_set, batch_size=config.batch_size,
-                              shuffle=False, num_workers=0, collate_fn=collate_fn)
-
+                                  shuffle=True, num_workers=0, collate_fn=collate_fn_train)
+    # 开发集用于验证
+    dev_set = ReaderDataset(dev_data, train=True)
+    dev_dataloader = DataLoader(dev_set, batch_size=config.batch_size,
+                                  shuffle=False, num_workers=0, collate_fn=collate_fn_train)
     # 2 载入模型
     # 加载预训练bert
     model = BertForQuestionAnswering.from_pretrained("bert-base-chinese")
@@ -60,7 +60,8 @@ def train():
     # 4 开始训练
     for i in range(config.num_train_epochs):
         for step , batch in enumerate(tqdm(train_dataloader, desc="Epoch")):
-            input_ids, input_mask, segment_ids, start_positions, end_positions = batch
+            q_ids, input_ids, segment_ids, start_positions, end_positions = batch
+            input_mask = (input_ids > 0).to(device)
             input_ids, input_mask, segment_ids, start_positions, end_positions = \
                                         input_ids.to(device), input_mask.to(device), segment_ids.to(device), start_positions.to(device), end_positions.to(device)
 
@@ -74,48 +75,82 @@ def train():
                 optimizer.step()
                 scheduler.step(step)
                 optimizer.zero_grad()
-                print(loss.item())
+                # print(loss.item())
 
-    # # make prediction
-    # test_predicts = []
-    #
-    # for inputs, token_types in test_loader:
-    #     inputs, token_types = inputs.to(device), token_types.to(device)
-    #     masks = (inputs > 0).to(device)
-    #     v_pred = model(inputs, token_types, masks)
-    #     v_pred = torch.sigmoid(v_pred)
-    #     # predict
-    #     test_predicts.extend(v_pred.cpu().numpy())
-    #
-    # # 准备数据
-    # data = Dureader()
-    # train_dataloader, dev_dataloader = data.train_iter, data.dev_iter
-    #
-    #
-    torch.save(model.state_dict(), "final.pt")
+            if (step + 1) % 1000 == 0:
+                # 5 在开发集上验证
+                validate_dev(model, dev_dataloader)
+        metrics = validate_dev(model, dev_dataloader)
+        torch.save(model.state_dict(), "../model/final_epoch_%s_f1_%s.pt" % (str(i), str(metrics['F1'])))
 
 
-def evaluate(model, dev_data):
+# 开发集上预测验证函数
+def validate_dev(model, dev_data_loader):
     total, losses = 0.0, []
     device = config.device
 
     with torch.no_grad():
         model.eval()
-        for batch in dev_data:
+        pred_results = {}
+        for batch in dev_data_loader:
 
-            input_ids, input_mask, segment_ids, start_positions, end_positions = batch.input_ids, batch.input_mask, batch.segment_ids, batch.start_position, batch.end_position
-            loss, _, _ = model(input_ids.to(device), token_type_ids=segment_ids.to(device), attention_mask=input_mask.to(device),
-                               start_positions=start_positions.to(device), end_positions=end_positions.to(device))
-            loss = loss / config.gradient_accumulation_steps
-            losses.append(loss.item())
+            q_ids, input_ids, segment_ids, start_positions, end_positions = batch
+            input_ids, segment_ids, start_positions, end_positions = \
+            input_ids.to(device), segment_ids.to(device), start_positions.to(
+                device), end_positions.to(device)
+            input_mask = (input_ids > 0).to(device)
+            start_prob, end_prob = model(input_ids.to(device),
+                                         token_type_ids=segment_ids.to(device),
+                                         attention_mask=input_mask.to(device)
+                                        )
+            # start_prob = start_prob.squeeze(0)
+            # end_prob = end_prob.squeeze(0)
+            for i in range(len(batch[0])):
+                try:
+                    (best_start, best_end), max_prob = find_best_answer_for_passage(start_prob[i], end_prob[i])
+                except:
+                    pass
+                pred_results[q_ids[i]] = (best_start.cpu().numpy()[0], best_end.cpu().numpy()[0])
+        submit = {}
+        for item in dev_data:
+            q_id = item[0]
+            context = item[1]
+            question = item[2]
+            new_sentence = '.'+question+'。'+context
+            submit[q_id] = new_sentence[pred_results[q_id][0]:pred_results[q_id][1]]
+            print(question, new_sentence[pred_results[q_id][0]:pred_results[q_id][1]])
 
-        for i in losses:
-            total += i
-        with open("./log", 'a') as f:
-            f.write("eval_loss: " + str(total / len(losses)) + "\n")
+        submit_path = 'submit.json'
+        metrics = evaluate(submit, submit_path)
+        print(metrics)
+        return metrics
+        # return total / len(losses)
 
-        return total / len(losses)
+
+def evaluate(submit_dict, submit_path):
+    """评测函数（官方提供评测脚本evaluate.py）
+    """
+    predict_to_file(submit_dict, submit_path)
+    metrics = json.loads(
+        os.popen(
+            'python3 ../evaluate.py %s %s'
+            % ('../data/dev.json', submit_path)
+        ).read().strip()
+    )
+    return metrics
+
+
+def predict_to_file(submit_dict, out_file):
+    """预测结果到文件，方便提交
+    """
+    fw = open(out_file, 'w', encoding='utf-8')
+    R = json.dumps(submit_dict, ensure_ascii=False, indent=4)
+    fw.write(R)
+    fw.close()
 
 
 if __name__ == "__main__":
+    # 1 载入数据
+    train_data = load_data('../data/train.json')
+    dev_data = load_data('../data/dev.json')
     train()
