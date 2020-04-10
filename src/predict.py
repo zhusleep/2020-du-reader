@@ -8,14 +8,9 @@ from torch import nn, optim
 
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
-from torch.utils.data import Dataset
-from transformers import AdamW, get_constant_schedule_with_warmup
-# from dataset.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
-<<<<<<< HEAD
 from transformers import BertTokenizer, BertForQuestionAnswering, BertConfig
-=======
+
 from transformers import BertForQuestionAnswering, BertConfig
->>>>>>> cdfe46465f8717374a0282726aff78aeaeb6ae0a
 from utils import *
 # 随机种子
 random.seed(config.seed)
@@ -36,16 +31,11 @@ def load_test_data(filename):
 
 def predict():
     # 1 封装数据
-<<<<<<< HEAD
+
     tokenizer = BertTokenizer.from_pretrained('bert-base-chinese', do_lower_case=True)
     test_set = ReaderDataset(test_data, tokenizer=tokenizer, train=False)
     test_dataloader = DataLoader(test_set, batch_size=30,
                                   shuffle=False, num_workers=0, collate_fn=collate_fn_test)
-=======
-    test_set = ReaderDataset(test_data, train=False)
-    test_dataloader = DataLoader(test_set, batch_size=30,
-                                  shuffle=True, num_workers=0, collate_fn=collate_fn_test)
->>>>>>> cdfe46465f8717374a0282726aff78aeaeb6ae0a
 
     # 2 载入模型
     # 加载预训练bert
@@ -54,11 +44,8 @@ def predict():
     model.to(device)
 
     # 3 载入权重
-<<<<<<< HEAD
+
     model.load_state_dict(torch.load("../model/final_epoch_0_f1_76.997.pt"))
-=======
-    model.load_state_dict(torch.load("final.pt"))
->>>>>>> cdfe46465f8717374a0282726aff78aeaeb6ae0a
 
     # 4 开始预测
     with torch.no_grad():
@@ -89,11 +76,9 @@ def predict():
             new_sentence = '.' + question + '。' + context
             submit[q_id] = new_sentence[pred_results[q_id][0]:pred_results[q_id][1]]
             print(question, new_sentence[pred_results[q_id][0]:pred_results[q_id][1]])
-<<<<<<< HEAD
+
         submit_path = '../submit/submit-0410-2.json'
-=======
-        submit_path = '../submit/submit-0410.json'
->>>>>>> cdfe46465f8717374a0282726aff78aeaeb6ae0a
+
         predict_to_file(submit, submit_path)
 
 

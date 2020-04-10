@@ -66,6 +66,7 @@ class ReaderDataset(Dataset):
         self._data = data
         self.train = train
         self._tokenizer = tokenizer
+
     def __len__(self):
         return len(self._data)
 
