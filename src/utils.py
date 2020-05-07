@@ -17,17 +17,17 @@ from torch.utils.data import Dataset
 from transformers import AlbertConfig, AlbertModel, BertTokenizer
 
 
-def convert_one_line(item, tokenizer=None, train=True):
+def convert_one_line(item, tokenizer=None, mode='train'):
     q_id = item[0]
     doc_tokens = item[1]
     query_tokens = item[2]
-    doc_tokens = doc_tokens.replace(u"“", u"\"")
+    # doc_tokens = doc_tokens.replace(u"“", u"\"")
     # 起始位置偏离
     delta_pos = 0
     if len(query_tokens) > config.max_query_length:
         query_tokens = query_tokens[0:config.max_query_length]
     if len(doc_tokens) > 450:
-        if train:
+        if mode=='train' or mode=='dev':
             answer = item[3]
             start_pos = item[4]
             if start_pos+len(answer) < 450:
@@ -42,7 +42,7 @@ def convert_one_line(item, tokenizer=None, train=True):
     token_type = np.zeros(len(one_token))
     token_type[-len(doc_tokens)-1:] = 1
     # start and end position
-    if train:
+    if mode == 'train' or mode == 'dev':
         answer = item[3]
         start_pos = item[4]
         start_id = int(start_pos)
@@ -58,29 +58,155 @@ def convert_one_line(item, tokenizer=None, train=True):
         return q_id, one_token, token_type
 
 
+def random_crop(sentence, start, text, n=2):
+    """
+    :param sentence: 答案所在段落
+    :param start: 开始位置
+    :param text: 答案
+    :param max_len: 数据最大长度
+    :param n: 数据增强成几份
+    :return:[（sentence, start, text）]
+    """
+    # 随机切分成好几句话
+    # 计算分割点
+    results = []
+    split_symbol = set(['，', '。', ' '])
+    left_split_pos = []
+    right_split_pos = []
+    for index, char in enumerate(sentence):
+        if start <= index < start+len(text):
+            continue
+        if char in split_symbol:
+            if index < start:
+                left_split_pos.append(index)
+            else:
+                right_split_pos.append(index)
+    for r in range(2):
+        temp_start, temp_end = 0, len(sentence)
+        text_start = start
+        if left_split_pos:
+            temp_start = np.random.choice(left_split_pos, 1)[0]
+            temp_start += 1
+            text_start = text_start - temp_start
+        if right_split_pos:
+            temp_end = np.random.choice(right_split_pos, 1)[0]
+            temp_end += 1
+        results.append([sentence[temp_start:temp_end], text_start, text])
+    # 保留原先输入
+    results.append([sentence, start, text])
+    return results
+
+
+def limit_len(crop_result, max_len=450):
+    new_results = []
+    for sentence, start, text in crop_result:
+        assert sentence[start:start+len(text)] == text
+        if len(sentence) < max_len:
+            new_results.append([sentence, start, text])
+        else:
+            sentence_split = []
+            if start+len(text) < max_len:
+                sentence_split.append([sentence[0:max_len], start, text])
+            if len(sentence)-max_len < start:
+                cut = sentence[-max_len::]
+                if cut[0:2]=='0 ':
+                    pass
+                sentence_split.append([cut, start-len(sentence)+len(cut), text])
+            if not sentence_split:
+                # 如果答案刚好在中间，则在答案左右进行切割
+                sentence_split.append([sentence[start-150:start+300], 150, text])
+            new_results.extend(sentence_split)
+
+    for sentence, start, text in new_results:
+        # print(sentence, start, text)
+        if sentence[start:start+len(text)] != text:
+            print(sentence, start, text)
+
+    return new_results
+
+
+def convert_one_line_new(item, tokenizer=None):
+    q_id = item[0]
+    doc_tokens = item[1]
+    query_tokens = item[2]
+    answer = item[3]
+    start_pos = item[4]
+
+    # doc_tokens = doc_tokens.replace(u"“", u"\"")
+    # 起始位置偏离
+    delta_pos = 0
+    if len(query_tokens) > config.max_query_length:
+        query_tokens = query_tokens[0:config.max_query_length]
+    # 随机切割
+    crop_results = random_crop(doc_tokens, start_pos, answer)
+    # 限制长度
+    results_limit_len = limit_len(crop_results)
+    tokenizer_results = []
+    for sentence, start, text in results_limit_len:
+        assert sentence[start:start+len(text)] == text
+        one_token = tokenizer.convert_tokens_to_ids(
+            ["[CLS]"] + list(query_tokens) + ["[SEP]"] + list(sentence) + ["[SEP]"])
+        token_type = np.zeros(len(one_token))
+        token_type[-len(doc_tokens)-1:] = 1
+        # start and end position
+        answer = item[3]
+        start_pos = start
+        start_id = int(start_pos)
+        start_id += len(query_tokens)+2
+        end_id = start_id + len(answer)
+        if end_id > len(one_token):
+            print(end_id, len(one_token))
+            raise Exception('数据长度被截取')
+        #assert one_token[start_id: end_id] == answer
+        tokenizer_results.append([q_id, one_token, token_type, start_id, end_id])
+    return tokenizer_results
+
+
 class ReaderDataset(Dataset):
 
     def __init__(self, data, vocab_path=None, do_lower=True, tokenizer=None,
-                 train=True):
+                 mode='train'):
         super(ReaderDataset, self).__init__()
         self._data = data
-        self.train = train
+        self.mode = mode
         self._tokenizer = tokenizer
+        self.q_id, self.one_token, self.token_type, self.start_id, self.end_id = [],[],[],[],[]
+        if self.mode == 'train':
+            self.collect_data()
 
     def __len__(self):
+        if self.mode=='train':
+            return len(self.q_id)
         return len(self._data)
 
+    def collect_data(self):
+        for item in self._data:
+            results = convert_one_line_new(item, tokenizer=self._tokenizer)
+            for q_id, one_token, token_type, start_id, end_id in results:
+                self.q_id.append(q_id)
+                self.one_token.append(one_token)
+                self.token_type.append(token_type)
+                self.start_id.append(start_id)
+                self.end_id.append(end_id)
+
     def __getitem__(self, idx):
-        if self.train:
+        if self.mode == 'train':
+            # q_id, one_token, token_type, start_id, end_id = convert_one_line(self._data[idx],
+            #                                                                  tokenizer=self._tokenizer,
+            #                                                                  train=self.train)
+            q_id, one_token, token_type, start_id, end_id = self.q_id[idx], self.one_token[idx], self.token_type[idx], self.start_id[idx], self.end_id[idx]
+            return (q_id, torch.LongTensor(one_token), torch.LongTensor(token_type), start_id, end_id)
+
+        elif self.mode == 'dev':
             q_id, one_token, token_type, start_id, end_id = convert_one_line(self._data[idx],
                                                                              tokenizer=self._tokenizer,
-                                                                             train=self.train)
+                                                                             model=self.mode)
             return (q_id, torch.LongTensor(one_token), torch.LongTensor(token_type), \
-                   start_id, end_id)
-        else:
+                    start_id, end_id)
+        elif self.mode == 'test':
             q_id, one_token, token_type = convert_one_line(self._data[idx],
                                                            tokenizer=self._tokenizer,
-                                                           train=self.train)
+                                                           mode=self.mode)
             return q_id, torch.LongTensor(one_token), torch.LongTensor(token_type)
 
 

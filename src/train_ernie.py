@@ -27,10 +27,11 @@ def load_data(filename):
     D = []
     for d in json.load(open(filename))['data'][0]['paragraphs']:
         for qa in d['qas']:
-            D.append([
-                qa['id'], d['context'], qa['question'],qa['answers'][0]['text'],qa['answers'][0]['answer_start']
-                # [a['text'] for a in qa.get('answers', [])]
-            ])
+            for i in range(len(qa['answers'])):
+                D.append([
+                    qa['id'], d['context'], qa['question'],qa['answers'][i]['text'],qa['answers'][i]['answer_start']
+                    # [a['text'] for a in qa.get('answers', [])]
+                ])
     return D
 
 
@@ -41,11 +42,11 @@ def train():
     #VOCAB_PATH = Path(VOCAB_PATH)
     tokenizer = BertTokenizer.from_pretrained(
                     VOCAB_PATH, cache_dir=None, do_lower_case=True)
-    train_set = ReaderDataset(train_data,train=True, tokenizer=tokenizer)
+    train_set = ReaderDataset(train_data,mode='train', tokenizer=tokenizer)
     train_dataloader = DataLoader(train_set, batch_size=config.batch_size,
                                   shuffle=True, num_workers=0, collate_fn=collate_fn_train)
     # 开发集用于验证
-    dev_set = ReaderDataset(dev_data, train=True, tokenizer=tokenizer)
+    dev_set = ReaderDataset(dev_data, mode='dev', tokenizer=tokenizer)
     dev_dataloader = DataLoader(dev_set, batch_size=config.batch_size,
                                   shuffle=False, num_workers=0, collate_fn=collate_fn_train)
     # 2 载入模型
@@ -70,8 +71,9 @@ def train():
     scheduler = get_constant_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps)
 
     # 4 开始训练
+    best_f1 = 0
     for i in range(config.num_train_epochs):
-        for step , batch in enumerate(tqdm(train_dataloader, desc="Epoch")):
+        for step, batch in enumerate(tqdm(train_dataloader, desc="Epoch")):
             q_ids, input_ids, segment_ids, start_positions, end_positions = batch
             input_mask = (input_ids > 0).to(device)
             input_ids, input_mask, segment_ids, start_positions, end_positions = \
@@ -89,11 +91,16 @@ def train():
                 optimizer.zero_grad()
                 # print(loss.item())
 
-            if (step + 1) % 1000 == 0:
+            if (step + 1) % 500 == 0 and i != 0:
                 # 5 在开发集上验证
-                validate_dev(model, dev_dataloader)
+                metrics = validate_dev(model, dev_dataloader)
+                if metrics['F1']>best_f1:
+                    torch.save(model.state_dict(), "../model/ernie_epoch_%s_f1_%s.pt" % (str(i), str(metrics['F1'])))
+                    best_f1 = metrics['F1']
         metrics = validate_dev(model, dev_dataloader)
-        torch.save(model.state_dict(), "../model/ernie_epoch_%s_f1_%s.pt" % (str(i), str(metrics['F1'])))
+        if metrics['F1']>best_f1:
+            best_f1 = metrics['F1']
+            torch.save(model.state_dict(), "../model/ernie_epoch_%s_f1_%s.pt" % (str(i), str(metrics['F1'])))
 
 
 # 开发集上预测验证函数
@@ -130,7 +137,7 @@ def validate_dev(model, dev_data_loader):
             question = item[2]
             new_sentence = '.'+question+'。'+context
             submit[q_id] = new_sentence[pred_results[q_id][0]:pred_results[q_id][1]]
-            print(question, new_sentence[pred_results[q_id][0]:pred_results[q_id][1]])
+            #print(question, new_sentence[pred_results[q_id][0]:pred_results[q_id][1]])
 
         submit_path = '../submit/submit.json'
         metrics = evaluate(submit, submit_path)
@@ -149,6 +156,7 @@ def evaluate(submit_dict, submit_path):
             % ('../data/dev.json', submit_path)
         ).read().strip()
     )
+    metrics['F1'] = float(metrics['F1'])
     return metrics
 
 

@@ -32,20 +32,24 @@ def load_test_data(filename):
 def predict():
     # 1 封装数据
 
-    tokenizer = BertTokenizer.from_pretrained('bert-base-chinese', do_lower_case=True)
-    test_set = ReaderDataset(test_data, tokenizer=tokenizer, train=False)
+    VOCAB_PATH = '../lm_pretrained/ernie/vocab.txt'
+    #VOCAB_PATH = Path(VOCAB_PATH)
+    tokenizer = BertTokenizer.from_pretrained(
+                    VOCAB_PATH, cache_dir=None, do_lower_case=True)
+    test_set = ReaderDataset(test_data, tokenizer=tokenizer, mode='test')
     test_dataloader = DataLoader(test_set, batch_size=30,
                                   shuffle=False, num_workers=0, collate_fn=collate_fn_test)
 
     # 2 载入模型
     # 加载预训练bert
-    model = BertForQuestionAnswering.from_pretrained("bert-base-chinese")
+    MODEL_PATH = '../lm_pretrained/ernie/'
+    model = BertForQuestionAnswering.from_pretrained(MODEL_PATH)
     device = config.device
     model.to(device)
 
     # 3 载入权重
 
-    model.load_state_dict(torch.load("../model/final_epoch_0_f1_76.997.pt"))
+    model.load_state_dict(torch.load("../model/ernie_epoch_1_f1_79.225.pt"))
 
     # 4 开始预测
     with torch.no_grad():
@@ -74,10 +78,11 @@ def predict():
             context = item[1]
             question = item[2]
             new_sentence = '.' + question + '。' + context
+            if q_id not in pred_results:continue
             submit[q_id] = new_sentence[pred_results[q_id][0]:pred_results[q_id][1]]
             print(question, new_sentence[pred_results[q_id][0]:pred_results[q_id][1]])
 
-        submit_path = '../submit/submit-0410-2.json'
+        submit_path = '../submit/submit-0508.json'
 
         predict_to_file(submit, submit_path)
 
