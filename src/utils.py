@@ -204,9 +204,7 @@ class ReaderDataset(Dataset):
             return (q_id, torch.LongTensor(one_token), torch.LongTensor(token_type), start_id, end_id)
 
         elif self.mode == 'test':
-            q_id, one_token, token_type = convert_one_line(self._data[idx],
-                                                           tokenizer=self._tokenizer,
-                                                           mode=self.mode)
+            q_id, one_token, token_type = self.q_id[idx], self.one_token[idx], self.token_type[idx]
             return q_id, torch.LongTensor(one_token), torch.LongTensor(token_type)
 
 

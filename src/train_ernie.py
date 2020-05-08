@@ -36,8 +36,8 @@ def load_data(filename, mode='train'):
                     qa['id'], d['context'], qa['question'],qa['answers'][i]['text'],qa['answers'][i]['answer_start']
                     # [a['text'] for a in qa.get('answers', [])]
                 ])
-                if mode=='dev':
-                    break
+                # 只保留第一个答案
+                break
 
     return D
 
@@ -77,7 +77,7 @@ def train():
     warmup_steps = int(0.1 * total_steps)
     scheduler = get_constant_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps)
     # validate
-    pure_validate = True
+    pure_validate = False
     if pure_validate:
         model.load_state_dict(torch.load("../model/ernie_epoch_0_f1_78.909.pt"))
         validate_dev(model, dev_dataloader)
@@ -103,7 +103,7 @@ def train():
                 optimizer.zero_grad()
                 # print(loss.item())
 
-            if (step + 1) % 500 == 0 and i != 0:
+            if (step + 1) % 500 == 0:
                 # 5 在开发集上验证
                 metrics = validate_dev(model, dev_dataloader)
                 if metrics['F1']>best_f1:

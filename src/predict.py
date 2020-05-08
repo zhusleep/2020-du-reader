@@ -26,7 +26,7 @@ def load_test_data(filename):
                 qa['id'], d['context'], qa['question']
                 # [a['text'] for a in qa.get('answers', [])]
             ])
-    return D
+    return D[0:100]
 
 
 def predict():
