@@ -75,7 +75,7 @@ def limit_len(crop_result, max_len=450, mode='train'):
                 # 如果答案刚好在中间，则在答案左右进行切割
                 sentence_split.append([sentence[start-150:start+300], 150, text])
             new_results.extend(sentence_split)
-        elif mode=='dev':
+        elif mode in ['dev','test']:
             for i in range(int(len(sentence)/450)+1):
                 new_results.append([sentence[i*450:(i+1)*450], -1, ''])
 

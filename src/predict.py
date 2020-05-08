@@ -49,7 +49,7 @@ def predict():
 
     # 3 载入权重
 
-    model.load_state_dict(torch.load("../model/ernie_epoch_1_f1_79.225.pt"))
+    model.load_state_dict(torch.load("../model/ernie_epoch_0_f1_78.909.pt"))
 
     # 4 开始预测
     with torch.no_grad():
@@ -69,7 +69,7 @@ def predict():
             for i in range(len(batch[0])):
                 try:
                     (best_start, best_end), max_prob = find_best_answer_for_passage(start_prob[i], end_prob[i])
-                    if best_end-best_start > 30:
+                    if type(max_prob) == int:
                         max_prob = 0
                     else:
                         max_prob = max_prob.cpu().numpy()[0]
@@ -94,7 +94,7 @@ def predict():
             submit[q_id] = new_sentence[pred_results[q_id][0]:pred_results[q_id][1]]
             print(question, new_sentence[pred_results[q_id][0]:pred_results[q_id][1]])
 
-        submit_path = '../submit/submit-0500.json'
+        submit_path = '../submit/submit-0510_v1.json'
 
         predict_to_file(submit, submit_path)
 
