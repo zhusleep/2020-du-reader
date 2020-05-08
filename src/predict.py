@@ -69,9 +69,21 @@ def predict():
             for i in range(len(batch[0])):
                 try:
                     (best_start, best_end), max_prob = find_best_answer_for_passage(start_prob[i], end_prob[i])
+                    if best_end-best_start > 30:
+                        max_prob = 0
+                    else:
+                        max_prob = max_prob.cpu().numpy()[0]
                 except:
                     pass
-                pred_results[q_ids[i]] = (best_start.cpu().numpy()[0], best_end.cpu().numpy()[0])
+                if q_ids[i] in pred_results:
+                    pred_results[q_ids[i]].append(
+                        (best_start.cpu().numpy()[0], best_end.cpu().numpy()[0], max_prob))
+                else:
+                    pred_results[q_ids[i]] = [(best_start.cpu().numpy()[0], best_end.cpu().numpy()[0], max_prob)]
+        # 保留最大概率的答案
+        for id in pred_results:
+            pred_results[id] = sorted(pred_results[id], key=lambda x: x[2], reverse=True)[0]
+
         submit = {}
         for item in test_data:
             q_id = item[0]
@@ -82,7 +94,7 @@ def predict():
             submit[q_id] = new_sentence[pred_results[q_id][0]:pred_results[q_id][1]]
             print(question, new_sentence[pred_results[q_id][0]:pred_results[q_id][1]])
 
-        submit_path = '../submit/submit-0508.json'
+        submit_path = '../submit/submit-0500.json'
 
         predict_to_file(submit, submit_path)
 

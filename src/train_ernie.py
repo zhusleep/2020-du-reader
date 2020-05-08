@@ -23,15 +23,22 @@ torch.manual_seed(config.seed)
 import json
 
 
-def load_data(filename):
+def load_data(filename, mode='train'):
     D = []
     for d in json.load(open(filename))['data'][0]['paragraphs']:
         for qa in d['qas']:
+
             for i in range(len(qa['answers'])):
+
+                if qa['answers'][i]['answer_start']==-1:
+                    qa['answers'][i]['answer_start'] = d['context'].index(qa['answers'][i]['text'])
                 D.append([
                     qa['id'], d['context'], qa['question'],qa['answers'][i]['text'],qa['answers'][i]['answer_start']
                     # [a['text'] for a in qa.get('answers', [])]
                 ])
+                if mode=='dev':
+                    break
+
     return D
 
 
@@ -42,7 +49,7 @@ def train():
     #VOCAB_PATH = Path(VOCAB_PATH)
     tokenizer = BertTokenizer.from_pretrained(
                     VOCAB_PATH, cache_dir=None, do_lower_case=True)
-    train_set = ReaderDataset(train_data,mode='dev', tokenizer=tokenizer)
+    train_set = ReaderDataset(train_data,mode='train', tokenizer=tokenizer)
     train_dataloader = DataLoader(train_set, batch_size=config.batch_size,
                                   shuffle=True, num_workers=0, collate_fn=collate_fn_train)
     # 开发集用于验证
@@ -69,7 +76,12 @@ def train():
     total_steps = config.num_train_optimization_steps
     warmup_steps = int(0.1 * total_steps)
     scheduler = get_constant_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps)
-
+    # validate
+    pure_validate = True
+    if pure_validate:
+        model.load_state_dict(torch.load("../model/ernie_epoch_0_f1_78.909.pt"))
+        validate_dev(model, dev_dataloader)
+        raise
     # 4 开始训练
     best_f1 = 0
     for i in range(config.num_train_epochs):
@@ -111,7 +123,7 @@ def validate_dev(model, dev_data_loader):
     with torch.no_grad():
         model.eval()
         pred_results = {}
-        for batch in dev_data_loader:
+        for batch in tqdm(dev_data_loader):
 
             q_ids, input_ids, segment_ids, start_positions, end_positions = batch
             input_ids, segment_ids, start_positions, end_positions = \
@@ -125,11 +137,26 @@ def validate_dev(model, dev_data_loader):
             # start_prob = start_prob.squeeze(0)
             # end_prob = end_prob.squeeze(0)
             for i in range(len(batch[0])):
+                # print(q_ids[i])
+                # if q_ids[i] == 'e7890aef2762a6ff46621936a5d0fbdd':
+                #     jjj = 1
+                #     raise
                 try:
                     (best_start, best_end), max_prob = find_best_answer_for_passage(start_prob[i], end_prob[i])
+                    if best_end-best_start > 30:
+                        max_prob = 0
+                    else:
+                        max_prob = max_prob.cpu().numpy()[0]
                 except:
                     pass
-                pred_results[q_ids[i]] = (best_start.cpu().numpy()[0], best_end.cpu().numpy()[0])
+                if q_ids[i] in pred_results:
+                    pred_results[q_ids[i]].append((best_start.cpu().numpy()[0], best_end.cpu().numpy()[0], max_prob))
+                else:
+                    pred_results[q_ids[i]] = [(best_start.cpu().numpy()[0], best_end.cpu().numpy()[0], max_prob)]
+        # 保留最大概率的答案
+        for id in pred_results:
+            pred_results[id] = sorted(pred_results[id],key=lambda x:x[2], reverse=True)[0]
+
         submit = {}
         for item in dev_data:
             q_id = item[0]
@@ -137,7 +164,7 @@ def validate_dev(model, dev_data_loader):
             question = item[2]
             new_sentence = '.'+question+'。'+context
             submit[q_id] = new_sentence[pred_results[q_id][0]:pred_results[q_id][1]]
-            #print(question, new_sentence[pred_results[q_id][0]:pred_results[q_id][1]])
+            print(question, new_sentence[pred_results[q_id][0]:pred_results[q_id][1]])
 
         submit_path = '../submit/submit.json'
         metrics = evaluate(submit, submit_path)
@@ -172,5 +199,6 @@ def predict_to_file(submit_dict, out_file):
 if __name__ == "__main__":
     # 1 载入数据
     train_data = load_data('../data/train.json')
-    dev_data = load_data('../data/dev.json')
+    dev_data = load_data('../data/dev.json', mode='dev')
     train()
+
