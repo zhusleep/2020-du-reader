@@ -42,7 +42,7 @@ def train():
     #VOCAB_PATH = Path(VOCAB_PATH)
     tokenizer = BertTokenizer.from_pretrained(
                     VOCAB_PATH, cache_dir=None, do_lower_case=True)
-    train_set = ReaderDataset(train_data,mode='train', tokenizer=tokenizer)
+    train_set = ReaderDataset(train_data,mode='dev', tokenizer=tokenizer)
     train_dataloader = DataLoader(train_set, batch_size=config.batch_size,
                                   shuffle=True, num_workers=0, collate_fn=collate_fn_train)
     # 开发集用于验证

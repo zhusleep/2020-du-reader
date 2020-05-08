@@ -138,7 +138,8 @@ def convert_one_line_new(item, tokenizer=None):
     if len(query_tokens) > config.max_query_length:
         query_tokens = query_tokens[0:config.max_query_length]
     # 随机切割
-    crop_results = random_crop(doc_tokens, start_pos, answer)
+    # crop_results = random_crop(doc_tokens, start_pos, answer)
+    crop_results = [[doc_tokens, start_pos, answer]]
     # 限制长度
     results_limit_len = limit_len(crop_results)
     tokenizer_results = []

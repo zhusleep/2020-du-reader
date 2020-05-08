@@ -1,3 +1,10 @@
+# Baseline运行方法
+## cd src
+## python3 train_ernie.py
+## python3 predict.py
+
+
+
 # DuReader<sub>robust</sub> Dataset
 ##Files
 >**train.json:** the training set that contains around 15K samples. 
