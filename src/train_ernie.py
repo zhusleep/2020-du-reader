@@ -76,8 +76,8 @@ def train():
     total_steps = config.num_train_optimization_steps
     warmup_steps = int(0.1 * total_steps)
     scheduler = get_constant_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps)
-    # validate
-    pure_validate = False
+    # 纯粹验证validate
+    pure_validate = True
     if pure_validate:
         model.load_state_dict(torch.load("../model/ernie_epoch_0_f1_78.909.pt"))
         validate_dev(model, dev_dataloader)
@@ -143,12 +143,14 @@ def validate_dev(model, dev_data_loader):
                 #     raise
                 try:
                     (best_start, best_end), max_prob = find_best_answer_for_passage(start_prob[i], end_prob[i])
-                    if best_end-best_start > 30:
+                    if type(max_prob)==int:
                         max_prob = 0
                     else:
                         max_prob = max_prob.cpu().numpy()[0]
                 except:
                     pass
+                    raise
+                    # continue
                 if q_ids[i] in pred_results:
                     pred_results[q_ids[i]].append((best_start.cpu().numpy()[0], best_end.cpu().numpy()[0], max_prob))
                 else:

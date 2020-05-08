@@ -16,48 +16,6 @@ from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 from transformers import AlbertConfig, AlbertModel, BertTokenizer
 
-
-def convert_one_line(item, tokenizer=None, mode='train'):
-    q_id = item[0]
-    doc_tokens = item[1]
-    query_tokens = item[2]
-    # doc_tokens = doc_tokens.replace(u"“", u"\"")
-    # 起始位置偏离
-    delta_pos = 0
-    if len(query_tokens) > config.max_query_length:
-        query_tokens = query_tokens[0:config.max_query_length]
-    if len(doc_tokens) > 450:
-        if mode=='train' or mode=='dev':
-            answer = item[3]
-            start_pos = item[4]
-            if start_pos+len(answer) < 450:
-                doc_tokens = doc_tokens[0:450]
-            else:
-                delta_pos = len(doc_tokens)-450
-                doc_tokens = doc_tokens[-450::]
-        else:
-            doc_tokens = doc_tokens[0:450]
-    one_token = tokenizer.convert_tokens_to_ids(
-        ["[CLS]"] + list(query_tokens) + ["[SEP]"] + list(doc_tokens) + ["[SEP]"])
-    token_type = np.zeros(len(one_token))
-    token_type[-len(doc_tokens)-1:] = 1
-    # start and end position
-    if mode == 'train' or mode == 'dev':
-        answer = item[3]
-        start_pos = item[4]
-        start_id = int(start_pos)
-        start_id += len(query_tokens)+2
-        start_id -= delta_pos
-        end_id = start_id + len(answer)
-        if end_id > len(one_token):
-            print(end_id, len(one_token))
-            raise Exception('数据长度被截取')
-        #assert one_token[start_id: end_id] == answer
-        return q_id, one_token, token_type, start_id,end_id
-    else:
-        return q_id, one_token, token_type
-
-
 def random_crop(sentence, start, text, n=2):
     """
     :param sentence: 答案所在段落
@@ -225,6 +183,23 @@ def collate_fn_test(batch):
 
 
 def find_best_answer_for_passage(start_probs, end_probs):
+    (best_start, best_end), max_prob = find_best_answer(start_probs, end_probs)
+    if best_end-best_start<30:
+        return (best_start, best_end), max_prob
+    # 限制最大长度为n
+    n = min(30,len(start_probs))
+    results = []
+    start_probs = start_probs-min(start_probs)
+    end_probs = end_probs-min(end_probs)
+
+    for i in range(0, len(start_probs)-n+1, 5):
+
+        (best_start, best_end), max_prob = find_best_answer(start_probs[i:i+n], end_probs[i:i+n])
+        results.append([(best_start+i, best_end+i), max_prob])
+    results_submit = sorted(results,key=lambda x:x[1], reverse=True)[0]
+    return results_submit
+
+def find_best_answer(start_probs, end_probs):
     best_start, best_end, max_prob = -1, -1, 0
 
     start_probs, end_probs = start_probs.unsqueeze(0), end_probs.unsqueeze(0)
@@ -241,6 +216,11 @@ def find_best_answer_for_passage(start_probs, end_probs):
             prob_start, best_start = torch.max(start_probs, 1)
             prob_end, best_end = torch.max(end_probs, 1)
         num += 1
+    # 防止负负得正
+
+    # if not first:
+    #     if prob_end<0 and prob_start<0:
+    #     return (prob_start,prob_end), -1
     max_prob = prob_start * prob_end
 
     if best_start <= best_end:
