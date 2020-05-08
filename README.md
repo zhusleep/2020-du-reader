@@ -3,7 +3,8 @@
 ## python3 train_ernie.py
 ## python3 predict.py
 
-
+# 目录结构
+![目录结构](https://github.com/zhusleep/2020-du-reader/blob/master/dir.png)
 
 # DuReader<sub>robust</sub> Dataset
 ##Files
