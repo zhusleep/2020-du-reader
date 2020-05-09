@@ -13,7 +13,7 @@ from transformers import AdamW, get_constant_schedule_with_warmup
 # from dataset.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
 from transformers import BertForQuestionAnswering, BertConfig
 from utils import *
-from transformers import BertTokenizer, BertForQuestionAnswering
+from transformers import BertTokenizer, BertForQuestionAnswering,RobertaTokenizer, RobertaForQuestionAnswering,RobertaForQuestionAnswering
 import torch
 from pathlib import Path
 
@@ -44,8 +44,9 @@ def load_data(filename, mode='train'):
 
 def train():
     # model = RobertaForQuestionAnswering.from_pretrained('../lm_pretrained/RoBERTa_zh_L12_PyTorch/pytorch_model.bin')
-
+    lm = 'roberta'
     VOCAB_PATH = '../lm_pretrained/ernie/vocab.txt'
+    # VOCAB_PATH = '../lm_pretrained/robertawwmextlargechinese/vocab.txt'
     #VOCAB_PATH = Path(VOCAB_PATH)
     tokenizer = BertTokenizer.from_pretrained(
                     VOCAB_PATH, cache_dir=None, do_lower_case=True)
@@ -54,16 +55,18 @@ def train():
                                   shuffle=True, num_workers=0, collate_fn=collate_fn_train)
     # 开发集用于验证
     dev_set = ReaderDataset(dev_data, mode='dev', tokenizer=tokenizer)
-    dev_dataloader = DataLoader(dev_set, batch_size=config.batch_size,
+    dev_dataloader = DataLoader(dev_set, batch_size=config.batch_size*4,
                                   shuffle=False, num_workers=0, collate_fn=collate_fn_train)
     # 2 载入模型
     # 加载预训练bert
-    # model = BertForQuestionAnswering.from_pretrained("bert-base-chinese")
+    # model = BertForQuestionAnswering.from_pretraineRobertaTokenizerd("bert-base-chinese")
     MODEL_PATH = '../lm_pretrained/ernie/'
+    # MODEL_PATH = '../lm_pretrained/robertawwmextlargechinese/'
+
     model = BertForQuestionAnswering.from_pretrained(MODEL_PATH)
     device = config.device
     model.to(device)
-
+    # tokenizer.encode()
     # 3 准备 optimizer
     param_optimizer = list(model.named_parameters())
     param_optimizer = [n for n in param_optimizer if 'pooler' not in n[0]]
@@ -77,16 +80,16 @@ def train():
     warmup_steps = int(0.1 * total_steps)
     scheduler = get_constant_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps)
     # 纯粹验证validate
-    pure_validate = True
+    pure_validate = False
     if pure_validate:
-        model.load_state_dict(torch.load("../model/ernie_epoch_0_f1_78.909.pt"))
+        model.load_state_dict(torch.load("../model/ernie_epoch_0_f1_80.027.pt"))
         validate_dev(model, dev_dataloader)
         raise
     # 4 开始训练
     best_f1 = 0
     for i in range(config.num_train_epochs):
         for step, batch in enumerate(tqdm(train_dataloader, desc="Epoch")):
-            q_ids, input_ids, segment_ids, start_positions, end_positions = batch
+            q_ids, raw_sentence,input_ids, segment_ids, start_positions, end_positions = batch
             input_mask = (input_ids > 0).to(device)
             input_ids, input_mask, segment_ids, start_positions, end_positions = \
                                         input_ids.to(device), input_mask.to(device), segment_ids.to(device), start_positions.to(device), end_positions.to(device)
@@ -109,6 +112,7 @@ def train():
                 if metrics['F1']>best_f1:
                     torch.save(model.state_dict(), "../model/ernie_epoch_%s_f1_%s.pt" % (str(i), str(metrics['F1'])))
                     best_f1 = metrics['F1']
+            # break
         metrics = validate_dev(model, dev_dataloader)
         if metrics['F1']>best_f1:
             best_f1 = metrics['F1']
@@ -123,9 +127,9 @@ def validate_dev(model, dev_data_loader):
     with torch.no_grad():
         model.eval()
         pred_results = {}
-        for batch in tqdm(dev_data_loader):
+        for index, batch in enumerate(tqdm(dev_data_loader, desc="Epoch")):
 
-            q_ids, input_ids, segment_ids, start_positions, end_positions = batch
+            q_ids, raw_sentence, input_ids, segment_ids, start_positions, end_positions = batch
             input_ids, segment_ids, start_positions, end_positions = \
             input_ids.to(device), segment_ids.to(device), start_positions.to(
                 device), end_positions.to(device)
@@ -137,10 +141,6 @@ def validate_dev(model, dev_data_loader):
             # start_prob = start_prob.squeeze(0)
             # end_prob = end_prob.squeeze(0)
             for i in range(len(batch[0])):
-                # print(q_ids[i])
-                # if q_ids[i] == 'e7890aef2762a6ff46621936a5d0fbdd':
-                #     jjj = 1
-                #     raise
                 try:
                     (best_start, best_end), max_prob = find_best_answer_for_passage(start_prob[i], end_prob[i])
                     if type(max_prob)==int:
@@ -152,21 +152,23 @@ def validate_dev(model, dev_data_loader):
                     raise
                     # continue
                 if q_ids[i] in pred_results:
-                    pred_results[q_ids[i]].append((best_start.cpu().numpy()[0], best_end.cpu().numpy()[0], max_prob))
+                    pred_results[q_ids[i]].append(
+                        (raw_sentence[i][best_start.cpu().numpy()[0]:best_end.cpu().numpy()[0]], max_prob))
                 else:
-                    pred_results[q_ids[i]] = [(best_start.cpu().numpy()[0], best_end.cpu().numpy()[0], max_prob)]
+                    pred_results[q_ids[i]] = [
+                        (raw_sentence[i][best_start.cpu().numpy()[0]:best_end.cpu().numpy()[0]], max_prob)]
         # 保留最大概率的答案
         for id in pred_results:
-            pred_results[id] = sorted(pred_results[id],key=lambda x:x[2], reverse=True)[0]
+            pred_results[id] = sorted(pred_results[id],key=lambda x:x[1], reverse=True)[0]
 
         submit = {}
         for item in dev_data:
             q_id = item[0]
-            context = item[1]
             question = item[2]
-            new_sentence = '.'+question+'。'+context
-            submit[q_id] = new_sentence[pred_results[q_id][0]:pred_results[q_id][1]]
-            print(question, new_sentence[pred_results[q_id][0]:pred_results[q_id][1]])
+            answer = item[3]
+            if q_id not in pred_results: continue
+            submit[q_id] = pred_results[q_id][0].strip()
+            print(question, 'pred: ',pred_results[q_id][0].strip(),' answer: ', answer)
 
         submit_path = '../submit/submit.json'
         metrics = evaluate(submit, submit_path)

@@ -8,7 +8,7 @@ train_input_file = "../data/train.json"
 dev_input_file = "../data/dev.json"
 
 
-max_seq_length = 512
+max_seq_length = 500
 max_query_length = 60
 
 output_dir = "./model_dir"

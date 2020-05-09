@@ -22,6 +22,7 @@ def load_test_data(filename):
     D = []
     for d in json.load(open(filename))['data'][0]['paragraphs']:
         for qa in d['qas']:
+            if qa['id']!='1a69135c5c01968ae05a77953b046f90':continue
             D.append([
                 qa['id'], d['context'], qa['question']
                 # [a['text'] for a in qa.get('answers', [])]
@@ -49,14 +50,14 @@ def predict():
 
     # 3 载入权重
 
-    model.load_state_dict(torch.load("../model/ernie_epoch_0_f1_78.909.pt"))
+    model.load_state_dict(torch.load("../model/ernie_epoch_0_f1_80.027.pt"))
 
     # 4 开始预测
     with torch.no_grad():
         model.eval()
         pred_results = {}
         for batch in tqdm(test_dataloader):
-            q_ids, input_ids, segment_ids = batch
+            q_ids, raw_sentence, input_ids, segment_ids = batch
             input_ids, segment_ids = \
                 input_ids.to(device), segment_ids.to(device)
             input_mask = (input_ids > 0).to(device)
@@ -77,24 +78,22 @@ def predict():
                     pass
                 if q_ids[i] in pred_results:
                     pred_results[q_ids[i]].append(
-                        (best_start.cpu().numpy()[0], best_end.cpu().numpy()[0], max_prob))
+                        (raw_sentence[i][best_start.cpu().numpy()[0]:best_end.cpu().numpy()[0]], max_prob))
                 else:
-                    pred_results[q_ids[i]] = [(best_start.cpu().numpy()[0], best_end.cpu().numpy()[0], max_prob)]
+                    pred_results[q_ids[i]] = [(raw_sentence[i][best_start.cpu().numpy()[0]:best_end.cpu().numpy()[0]], max_prob)]
         # 保留最大概率的答案
         for id in pred_results:
-            pred_results[id] = sorted(pred_results[id], key=lambda x: x[2], reverse=True)[0]
+            pred_results[id] = sorted(pred_results[id], key=lambda x: x[1], reverse=True)[0]
 
         submit = {}
         for item in test_data:
             q_id = item[0]
-            context = item[1]
             question = item[2]
-            new_sentence = '.' + question + '。' + context
             if q_id not in pred_results:continue
-            submit[q_id] = new_sentence[pred_results[q_id][0]:pred_results[q_id][1]]
-            print(question, new_sentence[pred_results[q_id][0]:pred_results[q_id][1]])
+            submit[q_id] = pred_results[q_id][0].strip()
+            print(question, pred_results[q_id][0].strip())
 
-        submit_path = '../submit/submit-0510_v1.json'
+        submit_path = '../submit/submit-0510_v2.json'
 
         predict_to_file(submit, submit_path)
 
