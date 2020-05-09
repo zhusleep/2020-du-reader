@@ -77,6 +77,9 @@ def limit_len(crop_result, max_len=450, mode='train'):
         elif mode in ['dev', 'test']:
             for i in range(int(len(sentence)/max_len)+1):
                 new_results.append([sentence[i*max_len:(i+1)*max_len], -1, ''])
+                # 避免答案在分割线中
+                new_results.append([sentence[int((i+0.5)*max_len):int((i+1.5)*max_len)], -1, ''])
+
 
     for sentence, start, text in new_results:
         # print(sentence, start, text)
@@ -197,22 +200,25 @@ def collate_fn_test(batch):
     return q_id, raw_sentence, token, token_type
 
 
-def find_best_answer_for_passage(start_probs, end_probs):
+def find_best_answer_for_passage(start_probs, end_probs, valid_start):
+    start_probs, end_probs = start_probs[valid_start:], end_probs[valid_start:]
     (best_start, best_end), max_prob = find_best_answer(start_probs, end_probs)
-    if best_end-best_start<30:
-        return (best_start, best_end), max_prob
+    maxlen = 40
+    if best_end-best_start < maxlen:
+        return (best_start+valid_start, best_end+valid_start), max_prob
     # 限制最大长度为n
-    n = min(30,len(start_probs))
+    n = min(maxlen,len(start_probs))
     results = []
-    start_probs = start_probs-min(start_probs)
-    end_probs = end_probs-min(end_probs)
+    # start_probs = start_probs-min(start_probs)
+    # end_probs = end_probs-min(end_probs)
 
     for i in range(0, len(start_probs)-n+1, 5):
 
         (best_start, best_end), max_prob = find_best_answer(start_probs[i:i+n], end_probs[i:i+n])
         results.append([(best_start+i, best_end+i), max_prob])
     results_submit = sorted(results,key=lambda x:x[1], reverse=True)[0]
-    return results_submit
+    (best_start, best_end), max_prob = results_submit
+    return (best_start + valid_start, best_end + valid_start), max_prob
 
 
 def find_best_answer(start_probs, end_probs):
@@ -222,22 +228,38 @@ def find_best_answer(start_probs, end_probs):
     prob_start, best_start = torch.max(start_probs, 1)
     prob_end, best_end = torch.max(end_probs, 1)
     num = 0
+    results = []
     while True:
         if num > 3:
             break
         if best_end >= best_start:
             break
         else:
-            start_probs[0][best_start], end_probs[0][best_end] = 0.0, 0.0
-            prob_start, best_start = torch.max(start_probs, 1)
-            prob_end, best_end = torch.max(end_probs, 1)
+            # be
+            # start_probs[0][best_start], end_probs[0][best_end] = start_probs[0][best_start], -10
+            # 最大最小位置颠倒，则分开计算
+            prob_start_1, best_start_1 = best_start, prob_start
+            prob_end_1, best_end_1 = torch.max(end_probs[:, best_start:], 1)
+            max_prob_1 = prob_start_1 + prob_end_1
+            if best_end==0:
+                best_start,best_end,prob_start,prob_end = best_start,best_end_1+best_start,prob_start,prob_end_1
+                break
+            prob_start_2, best_start_2 = torch.max(start_probs[:, :best_end], 1)
+            prob_end_2, best_end_2 = best_end, prob_end
+            max_prob_2 = prob_start_2 + prob_end_2
+            if max_prob_1>max_prob_2:
+                best_start,best_end,prob_start,prob_end = best_start,best_end_1+best_start,prob_start,prob_end_1
+            else:
+                best_start,best_end,prob_start,prob_end = best_start_2,best_end,prob_start_2,prob_end
+            break
+
         num += 1
     # 防止负负得正
 
     # if not first:
     #     if prob_end<0 and prob_start<0:
     #     return (prob_start,prob_end), -1
-    max_prob = prob_start * prob_end
+    max_prob = prob_start + prob_end
 
     if best_start <= best_end:
         return (best_start, best_end), max_prob

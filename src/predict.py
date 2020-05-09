@@ -22,12 +22,12 @@ def load_test_data(filename):
     D = []
     for d in json.load(open(filename))['data'][0]['paragraphs']:
         for qa in d['qas']:
-            if qa['id']!='1a69135c5c01968ae05a77953b046f90':continue
+            # if qa['id']!='231442c96235d3acd16ed5042600a60d':continue
             D.append([
                 qa['id'], d['context'], qa['question']
                 # [a['text'] for a in qa.get('answers', [])]
             ])
-    return D[0:100]
+    return D
 
 
 def predict():
@@ -38,7 +38,7 @@ def predict():
     tokenizer = BertTokenizer.from_pretrained(
                     VOCAB_PATH, cache_dir=None, do_lower_case=True)
     test_set = ReaderDataset(test_data, tokenizer=tokenizer, mode='test')
-    test_dataloader = DataLoader(test_set, batch_size=30,
+    test_dataloader = DataLoader(test_set, batch_size=60,
                                   shuffle=False, num_workers=0, collate_fn=collate_fn_test)
 
     # 2 载入模型
@@ -50,7 +50,7 @@ def predict():
 
     # 3 载入权重
 
-    model.load_state_dict(torch.load("../model/ernie_epoch_0_f1_80.027.pt"))
+    model.load_state_dict(torch.load("../model/ernie_epoch_1_f1_82.569.pt"))
 
     # 4 开始预测
     with torch.no_grad():
@@ -93,7 +93,7 @@ def predict():
             submit[q_id] = pred_results[q_id][0].strip()
             print(question, pred_results[q_id][0].strip())
 
-        submit_path = '../submit/submit-0510_v2.json'
+        submit_path = '../submit/submit-0509_v1.json'
 
         predict_to_file(submit, submit_path)
 
