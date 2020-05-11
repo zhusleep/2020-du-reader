@@ -9,6 +9,8 @@ from pathlib import Path
 import numpy as np
 import torch
 import config
+import unicodedata
+
 from redis import StrictRedis
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
@@ -53,6 +55,46 @@ def random_crop(sentence, start, text, n=2):
     # 保留原先输入
     results.append([sentence, start, text])
     return results
+
+
+def _is_chinese_char(cp):
+    """Checks whether CP is the codepoint of a CJK character."""
+    # This defines a "chinese character" as anything in the CJK Unicode block:
+    #   https://en.wikipedia.org/wiki/CJK_Unified_Ideographs_(Unicode_block)
+    #
+    # Note that the CJK Unicode block is NOT all Japanese and Korean characters,
+    # despite its name. The modern Korean Hangul alphabet is a different block,
+    # as is Japanese Hiragana and Katakana. Those alphabets are used to write
+    # space-separated words, so they are not treated specially and handled
+    # like the all of the other languages.
+    if (
+        (cp >= 0x4E00 and cp <= 0x9FFF)
+        or (cp >= 0x3400 and cp <= 0x4DBF)  #
+        or (cp >= 0x20000 and cp <= 0x2A6DF)  #
+        or (cp >= 0x2A700 and cp <= 0x2B73F)  #
+        or (cp >= 0x2B740 and cp <= 0x2B81F)  #
+        or (cp >= 0x2B820 and cp <= 0x2CEAF)  #
+        or (cp >= 0xF900 and cp <= 0xFAFF)
+        or (cp >= 0x2F800 and cp <= 0x2FA1F)  #
+    ):  #
+        return True
+
+    return False
+
+
+def _is_punctuation(char):
+    """Checks whether `chars` is a punctuation character."""
+    cp = ord(char)
+    # We treat all non-letter/number ASCII as punctuation.
+    # Characters such as "^", "$", and "`" are not in the Unicode
+    # Punctuation class but we treat them as punctuation anyways, for
+    # consistency.
+    if (cp >= 33 and cp <= 47) or (cp >= 58 and cp <= 64) or (cp >= 91 and cp <= 96) or (cp >= 123 and cp <= 126):
+        return True
+    cat = unicodedata.category(char)
+    if cat.startswith("P"):
+        return True
+    return False
 
 
 def limit_len(crop_result, max_len=450, mode='train'):
@@ -114,31 +156,74 @@ def convert_one_line_new(item, tokenizer=None, mode='train'):
                                   mode=mode)
     tokenizer_results = []
     for sentence, start, text in results_limit_len:
-        if mode == 'train' or True:
+        if len(sentence)==0:continue
+        if mode == 'train':
             assert sentence[start:start+len(text)] == text
-            one_token = tokenizer.convert_tokens_to_ids(
-                ["[CLS]"] + list(query_tokens.lower()) + ["[SEP]"] + list(sentence.lower()) + ["[SEP]"])
+            question = ["[CLS]"] + tokenizer.tokenize(query_tokens.lower()) + ["[SEP]"]
+            left_doc = tokenizer.tokenize(sentence.lower()[0:start])
+            middle_doc = tokenizer.tokenize(text.lower())
+            right_doc = tokenizer.tokenize(sentence.lower()[(start+len(text)):])+["[SEP]"]
+            one_token = tokenizer.convert_tokens_to_ids(question+left_doc+middle_doc+right_doc)
             token_type = np.zeros(len(one_token))
-            token_type[-len(sentence)-1:] = 1
+            token_type[len(question):] = 1
             # start and end position
-            start_pos = start
-            start_id = int(start_pos)
-            start_id += len(query_tokens)+2
-            end_id = start_id + len(answer)
-            raw_sentence = '.' + query_tokens + '。' + sentence
-            # if end_id > len(one_token):
-            #     print(end_id, len(one_token))
-            #     raise Exception('数据长度被截取')
-            # assert one_token[start_id: end_id] == answer
-            tokenizer_results.append([q_id, raw_sentence, one_token, token_type, start_id, end_id])
+            start_id = len(question+left_doc)
+            # start_id = int(start_pos)
+            # start_id += len(query_tokens)+2
+            end_id = len(question+left_doc+middle_doc)-1
+            # raw_sentence = '.' + query_tokens + '。' + sentence
+            tokenizer_results.append([q_id, (sentence,None,None), one_token, token_type, start_id, end_id])
         else:
-            query_tokens_after = tokenizer.tokenize(query_tokens)
-            sentence_after = tokenizer.tokenize(sentence)
-            one_token = tokenizer.convert_tokens_to_ids(
-                ["[CLS]"] + query_tokens_after + ["[SEP]"] + sentence_after + ["[SEP]"])
+            question = ["[CLS]"] + tokenizer.tokenize(query_tokens.lower()) + ["[SEP]"]
+            first_token_to_orig_index = {}
+            first_token_text = []
+            last_not_chinese_index = -1
+            seprate = set([',','.','?',':','!','<','>',"：","，","。","？","《","》",'、','-',
+                           '（','）','(',')','|','/','(','〕','.','~','”','①',';','＝'])
+            # 相当于空格填充后split() ------------
+            for index, char in enumerate(sentence):
+                cp = ord(char)
+                if _is_chinese_char(cp) or char in seprate or _is_punctuation(char):
+                    if last_not_chinese_index>=0:
+                        first_token_text.append(sentence[last_not_chinese_index:index])
+                        first_token_to_orig_index[len(first_token_text) - 1] = [last_not_chinese_index, index]
+                        last_not_chinese_index = -1
+                    first_token_text.append(char)
+                    first_token_to_orig_index[len(first_token_text)-1] = [index, index+1]
+                    last_not_chinese_index = -1
+                elif char == " ":
+                    if last_not_chinese_index>=0:
+                        first_token_text.append(sentence[last_not_chinese_index:index])
+                        first_token_to_orig_index[len(first_token_text)-1] = [last_not_chinese_index, index]
+                        last_not_chinese_index = -1
+                else:
+                    if last_not_chinese_index==-1:
+                        last_not_chinese_index = index
+            if sentence[-1] != " ":
+                first_token_text.append(sentence[last_not_chinese_index:index+1])
+                first_token_to_orig_index[len(first_token_text)-1] = [last_not_chinese_index, index+1]
+                last_not_chinese_index = -1
+            # split 结束 -----------------------
+            # 校验：
+            for index,item in enumerate(first_token_text):
+                assert item ==sentence[first_token_to_orig_index[index][0]:first_token_to_orig_index[index][1]]
+            # 开始tokenize
+            original_to_tokenized_index = []
+            tokenized_to_original_index = []
+            all_doc_tokens = []  # tokenized document text
+            for i , word in enumerate(first_token_text):
+                original_to_tokenized_index.append(len(all_doc_tokens))
+                word = word.lower()
+                for sub_token in word:
+                    tokenized_to_original_index.append(i)
+                    all_doc_tokens.append(sub_token)
+            one_token = tokenizer.convert_tokens_to_ids(question+all_doc_tokens)
+            if len(one_token)>512:
+                raise
+                continue
             token_type = np.zeros(len(one_token))
-            token_type[-len(sentence) - 1:] = 1
-            tokenizer_results.append([q_id, one_token, token_type, 0, 0])
+            token_type[len(question):] = 1
+            tokenizer_results.append([q_id, (sentence,tokenized_to_original_index,first_token_to_orig_index), one_token, token_type, 0, 0])
 
             # todo
     return tokenizer_results
@@ -181,7 +266,7 @@ class ReaderDataset(Dataset):
 
         elif self.mode == 'test':
             q_id, raw_sentence, one_token, token_type = self.q_id[idx], self.raw_sentence[idx], self.one_token[idx], self.token_type[idx]
-            return q_id,raw_sentence, torch.LongTensor(one_token), torch.LongTensor(token_type)
+            return q_id, raw_sentence, torch.LongTensor(one_token), torch.LongTensor(token_type)
 
 
 def collate_fn_train(batch):
@@ -200,12 +285,12 @@ def collate_fn_test(batch):
     return q_id, raw_sentence, token, token_type
 
 
-def find_best_answer_for_passage(start_probs, end_probs, valid_start):
-    start_probs, end_probs = start_probs[valid_start:], end_probs[valid_start:]
+def find_best_answer_for_passage(start_probs, end_probs, min_start, max_end):
+    start_probs, end_probs = start_probs[min_start:max_end], end_probs[min_start:max_end]
     (best_start, best_end), max_prob = find_best_answer(start_probs, end_probs)
-    maxlen = 40
+    maxlen = 30
     if best_end-best_start < maxlen:
-        return (best_start+valid_start, best_end+valid_start), max_prob
+        return (best_start+min_start, best_end+min_start), max_prob
     # 限制最大长度为n
     n = min(maxlen,len(start_probs))
     results = []
@@ -218,7 +303,7 @@ def find_best_answer_for_passage(start_probs, end_probs, valid_start):
         results.append([(best_start+i, best_end+i), max_prob])
     results_submit = sorted(results,key=lambda x:x[1], reverse=True)[0]
     (best_start, best_end), max_prob = results_submit
-    return (best_start + valid_start, best_end + valid_start), max_prob
+    return (best_start + min_start, best_end + min_start), max_prob
 
 
 def find_best_answer(start_probs, end_probs):
@@ -238,14 +323,14 @@ def find_best_answer(start_probs, end_probs):
             # be
             # start_probs[0][best_start], end_probs[0][best_end] = start_probs[0][best_start], -10
             # 最大最小位置颠倒，则分开计算
-            prob_start_1, best_start_1 = best_start, prob_start
+            prob_start_1, best_start_1 = prob_start,best_start
             prob_end_1, best_end_1 = torch.max(end_probs[:, best_start:], 1)
             max_prob_1 = prob_start_1 + prob_end_1
             if best_end==0:
                 best_start,best_end,prob_start,prob_end = best_start,best_end_1+best_start,prob_start,prob_end_1
                 break
             prob_start_2, best_start_2 = torch.max(start_probs[:, :best_end], 1)
-            prob_end_2, best_end_2 = best_end, prob_end
+            prob_end_2, best_end_2 = prob_end, best_end
             max_prob_2 = prob_start_2 + prob_end_2
             if max_prob_1>max_prob_2:
                 best_start,best_end,prob_start,prob_end = best_start,best_end_1+best_start,prob_start,prob_end_1
@@ -253,12 +338,6 @@ def find_best_answer(start_probs, end_probs):
                 best_start,best_end,prob_start,prob_end = best_start_2,best_end,prob_start_2,prob_end
             break
 
-        num += 1
-    # 防止负负得正
-
-    # if not first:
-    #     if prob_end<0 and prob_start<0:
-    #     return (prob_start,prob_end), -1
     max_prob = prob_start + prob_end
 
     if best_start <= best_end:

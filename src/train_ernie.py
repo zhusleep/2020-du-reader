@@ -15,6 +15,7 @@ from transformers import BertForQuestionAnswering, BertConfig
 from utils import *
 from transformers import BertTokenizer, BertForQuestionAnswering,RobertaTokenizer, RobertaForQuestionAnswering,RobertaForQuestionAnswering
 import torch
+from modeling import BertForQuestionAnswering
 from pathlib import Path
 
 # 随机种子
@@ -80,14 +81,15 @@ def train():
     warmup_steps = int(0.1 * total_steps)
     scheduler = get_constant_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps)
     # 纯粹验证validate
-    pure_validate = True
+    pure_validate = False
     if pure_validate:
-        model.load_state_dict(torch.load("../model/ernie_epoch_1_f1_82.569.pt"))
+        model.load_state_dict(torch.load("../model/ernie_epoch_0_f1_79.986.pt"))
         validate_dev(model, dev_dataloader)
         raise
     # 4 开始训练
     best_f1 = 0
     for i in range(config.num_train_epochs):
+        model.train()
         for step, batch in enumerate(tqdm(train_dataloader, desc="Epoch")):
             q_ids, raw_sentence,input_ids, segment_ids, start_positions, end_positions = batch
             input_mask = (input_ids > 0).to(device)
@@ -95,7 +97,7 @@ def train():
                                         input_ids.to(device), input_mask.to(device), segment_ids.to(device), start_positions.to(device), end_positions.to(device)
 
             # 计算loss
-            loss, _, _ = model(input_ids, token_type_ids=segment_ids, attention_mask=input_mask, start_positions=start_positions, end_positions=end_positions)
+            loss = model(input_ids, token_type_ids=segment_ids, attention_mask=input_mask, start_positions=start_positions, end_positions=end_positions)
             loss = loss / config.gradient_accumulation_steps
             loss.backward()
 
@@ -106,14 +108,17 @@ def train():
                 optimizer.zero_grad()
                 # print(loss.item())
 
-            if (step + 1) % 500 == 0:
+            if (step + 1) % 1000 == 0:
                 # 5 在开发集上验证
                 metrics = validate_dev(model, dev_dataloader)
+                model.train()
                 if metrics['F1']>best_f1:
                     torch.save(model.state_dict(), "../model/ernie_epoch_%s_f1_%s.pt" % (str(i), str(metrics['F1'])))
                     best_f1 = metrics['F1']
             # break
         metrics = validate_dev(model, dev_dataloader)
+        model.train()
+
         if metrics['F1']>best_f1:
             best_f1 = metrics['F1']
             torch.save(model.state_dict(), "../model/ernie_epoch_%s_f1_%s.pt" % (str(i), str(metrics['F1'])))
@@ -141,22 +146,30 @@ def validate_dev(model, dev_data_loader):
             # start_prob = start_prob.squeeze(0)
             # end_prob = end_prob.squeeze(0)
             for i in range(len(batch[0])):
+                sentence, tokenized_to_original_index, first_token_to_orig_index = raw_sentence[i]
                 try:
-                    (best_start, best_end), max_prob = find_best_answer_for_passage(start_prob[i], end_prob[i],sum(segment_ids[i]==0))
+                    (best_start, best_end), max_prob = find_best_answer_for_passage(start_prob[i], end_prob[i],
+                                                                                    min_start=sum(segment_ids[i]==0),
+                                                                                    max_end=input_mask[i].sum().item())
                     if type(max_prob)==int:
                         max_prob = 0
                     else:
                         max_prob = max_prob.cpu().numpy()[0]
+                    best_start, best_end = best_start.cpu().numpy()[0], best_end.cpu().numpy()[0]
+                    question_len = sum(segment_ids[i]==0).cpu().item()
+                    best_start, best_end = best_start-question_len, best_end-question_len
+                    best_start = first_token_to_orig_index[tokenized_to_original_index[best_start]][0]
+                    best_end = first_token_to_orig_index[tokenized_to_original_index[best_end]][1]
                 except:
                     pass
                     raise
                     # continue
                 if q_ids[i] in pred_results:
                     pred_results[q_ids[i]].append(
-                        (raw_sentence[i][best_start.cpu().numpy()[0]:best_end.cpu().numpy()[0]], max_prob))
+                        (sentence[best_start:best_end], max_prob))
                 else:
                     pred_results[q_ids[i]] = [
-                        (raw_sentence[i][best_start.cpu().numpy()[0]:best_end.cpu().numpy()[0]], max_prob)]
+                        (sentence[best_start:best_end], max_prob)]
         # 保留最大概率的答案
         for id in pred_results:
             pred_results[id] = sorted(pred_results[id],key=lambda x:x[1], reverse=True)[0]
